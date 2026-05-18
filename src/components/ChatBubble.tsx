@@ -11,9 +11,12 @@ type ChatBubbleProps = {
   /** 是否禁用入场动画 */
   disableAnimation?: boolean;
   variant?: "record" | "primary";
+  /** 气泡方向：right=自己发的(默认)，left=别人发的 */
+  side?: "left" | "right";
   topLabel?: string;
   onOpenDetail?: () => void;
   onOpenMemorySnapshot?: () => void;
+  onAiRecognize?: () => void;
   reference?: {
     label: string;
     text: string;
@@ -25,6 +28,7 @@ type ChatBubbleProps = {
     iconLabel: string;
     onClick: () => void;
   };
+  avatar?: React.ReactNode;
 };
 
 type ActionMenuPlacement = "above" | "below";
@@ -41,11 +45,14 @@ export default function ChatBubble({
   animationDelay,
   disableAnimation = false,
   variant = "record",
+  side = "right",
   topLabel,
   onOpenDetail,
   onOpenMemorySnapshot,
+  onAiRecognize,
   reference,
   source,
+  avatar,
 }: ChatBubbleProps) {
   const { t } = usePreferences();
   const candidateProfile = useCandidateProfile();
@@ -61,7 +68,8 @@ export default function ChatBubble({
   const longPressTriggeredRef = React.useRef(false);
   const hasText = textContent && textContent.length > 0;
   const wordCount = Array.from(textContent.trim()).length;
-  const canOpenMenu = Boolean(onOpenMemorySnapshot);
+  const canOpenMenu = Boolean(onOpenMemorySnapshot || onAiRecognize);
+  const isLeft = side === "left";
 
   const clearLongPressTimer = React.useCallback(() => {
     if (longPressTimerRef.current === null) return;
@@ -185,15 +193,25 @@ export default function ChatBubble({
   return (
     <div
       className={cn(
-        "relative flex justify-end gap-2 px-4 py-1.5",
-        // 流体入场动画 - 自然流淌效果
+        "relative flex gap-2 px-4 py-1.5",
+        isLeft ? "justify-start" : "justify-end",
         !disableAnimation && "animate-slide-up-fade opacity-0",
         animationDelay
       )}
     >
+      {isLeft && (
+        <div className="mt-0.5 shrink-0">
+          {avatar || (
+            <div className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-surface-muted text-[11px] font-semibold leading-none text-text-tertiary" />
+          )}
+        </div>
+      )}
       <div className="max-w-[82%]">
         {topLabel && (
-          <p className="mb-1 px-1 text-right text-[11px] leading-4 text-primary">
+          <p className={cn(
+            "mb-1 px-1 text-[11px] leading-4",
+            isLeft ? "text-left text-text-tertiary" : "text-right text-primary"
+          )}>
             {topLabel}
           </p>
         )}
@@ -201,10 +219,9 @@ export default function ChatBubble({
           <button
             type="button"
             className={cn(
-              "mb-1.5 ml-auto flex max-w-full items-center gap-1.5 rounded-[10px] border px-2.5 py-1.5 text-left text-[12px] leading-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition active:scale-[0.99]",
-              variant === "primary"
-                ? "border-[var(--record-card-border)] bg-[var(--record-card-bg)] text-text-muted hover:bg-[var(--record-card-hover-bg)]"
-                : "border-[var(--record-card-border)] bg-[var(--record-card-bg)] text-text-muted hover:bg-[var(--record-card-hover-bg)]"
+              "mb-1.5 flex max-w-full items-center gap-1.5 rounded-[10px] border px-2.5 py-1.5 text-left text-[12px] leading-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition active:scale-[0.99]",
+              isLeft ? "mr-auto" : "ml-auto",
+              "border-[var(--record-card-border)] bg-[var(--record-card-bg)] text-text-muted hover:bg-[var(--record-card-hover-bg)]"
             )}
             onClick={(event) => {
               event.stopPropagation();
@@ -260,10 +277,15 @@ export default function ChatBubble({
           onPointerLeave={handlePointerEnd}
           onKeyDown={handleKeyDown}
           className={cn(
-            "rounded-[14px] rounded-tr-[4px] px-3.5 py-2.5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
-            variant === "primary"
+            "px-3.5 py-2.5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
+            isLeft
+              ? "rounded-[14px] rounded-tl-[4px] bg-surface text-text transition hover:bg-[var(--record-card-hover-bg)]"
+              : "rounded-[14px] rounded-tr-[4px]",
+            !isLeft && variant === "primary"
               ? "bg-primary text-on-primary"
-              : "border border-[var(--record-card-border)] bg-[var(--record-card-bg)] text-text transition-[background-color,box-shadow] duration-[var(--duration)] hover:bg-[var(--record-card-hover-bg)]",
+              : !isLeft
+                ? "border border-[var(--record-card-border)] bg-[var(--record-card-bg)] text-text transition-[background-color,box-shadow] duration-[var(--duration)] hover:bg-[var(--record-card-hover-bg)]"
+                : "",
             onOpenDetail && "cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           )}
         >
@@ -271,7 +293,7 @@ export default function ChatBubble({
             <p
               className={cn(
                 "whitespace-pre-wrap break-words text-[14px] leading-[1.55] [overflow-wrap:anywhere]",
-                variant === "primary" ? "text-on-primary" : "text-text"
+                !isLeft && variant === "primary" ? "text-on-primary" : "text-text"
               )}
             >
               {textContent}
@@ -315,9 +337,11 @@ export default function ChatBubble({
           )}
         </div>
       </div>
-      <SelfMessageAvatar
-        label={candidateProfile?.avatarLabel || t("recordDetail.me").slice(0, 1)}
-      />
+      {!isLeft && (
+        <SelfMessageAvatar
+          label={candidateProfile?.avatarLabel || t("recordDetail.me").slice(0, 1)}
+        />
+      )}
       {menuOpen &&
         createPortal(
           <>
@@ -343,7 +367,17 @@ export default function ChatBubble({
                 aria-hidden="true"
               />
               <div className="relative z-10 overflow-hidden rounded-[14px] border border-border-light bg-[var(--dialog-bg)] text-text shadow-[0_12px_36px_rgba(0,0,0,0.24)]">
-                <div className="grid grid-cols-4 gap-1 px-2 py-2">
+                <div className="grid grid-cols-5 gap-1 px-2 py-2">
+                  {onAiRecognize && (
+                    <ActionMenuButton
+                      label="AI识别"
+                      icon="ai"
+                      onClick={() => {
+                        closeActionMenu();
+                        onAiRecognize();
+                      }}
+                    />
+                  )}
                   <ActionMenuButton
                     label={t("recordAction.copy")}
                     icon="copy"
@@ -438,7 +472,7 @@ function ActionMenuButton({
   label,
   onClick,
 }: {
-  icon: "copy" | "detail" | "open" | "reply";
+  icon: "copy" | "detail" | "open" | "reply" | "ai";
   label: string;
   onClick: () => void;
 }) {
@@ -459,7 +493,16 @@ function ActionMenuButton({
   );
 }
 
-function ActionMenuIcon({ icon }: { icon: "copy" | "detail" | "open" | "reply" }) {
+function ActionMenuIcon({ icon }: { icon: "copy" | "detail" | "open" | "reply" | "ai" }) {
+  if (icon === "ai") {
+    return (
+      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 2a4 4 0 014 4c0 2-2 6-4 8-2-2-4-6-4-8a4 4 0 014-4z" />
+        <path d="M8 14c-2 1-6 2-6 4 0 2 4 4 10 4s10-2 10-4c0-2-4-3-6-4" />
+      </svg>
+    );
+  }
+
   if (icon === "copy") {
     return (
       <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

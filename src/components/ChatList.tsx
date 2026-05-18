@@ -13,6 +13,7 @@ type ChatListProps = {
   onOpenSourceConversation?: (source: RecordSourceConversation) => void;
   onOpenRecordDetail?: (record: RecordItem) => void;
   onOpenRecordSnapshot?: (record: RecordItem) => void;
+  onAiRecognize?: (text: string) => void;
   targetRecordUid?: string | null;
 };
 
@@ -30,6 +31,7 @@ export default function ChatList({
   onOpenSourceConversation,
   onOpenRecordDetail,
   onOpenRecordSnapshot,
+  onAiRecognize,
   targetRecordUid,
 }: ChatListProps) {
   const { resolvedLocale, t } = usePreferences();
@@ -153,6 +155,9 @@ export default function ChatList({
             }
             onOpenMemorySnapshot={
               onOpenRecordSnapshot ? () => onOpenRecordSnapshot(record) : undefined
+            }
+            onAiRecognize={
+              onAiRecognize ? () => onAiRecognize(record.text_content) : undefined
             }
             reference={
               referencedRecord && onOpenRecordDetail

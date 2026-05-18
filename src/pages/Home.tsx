@@ -6,6 +6,14 @@ import ChatList from "@/components/ChatList";
 import RecordDetailSheet from "@/components/RecordDetailSheet";
 import RecordFullDetailScreen from "@/components/RecordFullDetailScreen";
 import Records from "@/pages/Records";
+import ArrangementsPage from "@/pages/Arrangements";
+import AiSettingsScreen from "@/components/mine/AiSettingsScreen";
+import AiRecognitionModal from "@/components/arrangements/AiRecognitionModal";
+import ReminderPopup from "@/components/arrangements/ReminderPopup";
+import { useArrangements, loadArrangements } from "@/lib/arrangementStore";
+import { useMemoryFile } from "@/lib/memoryStore";
+import { scanDueTriggers } from "@/lib/reminderEngine";
+import { enqueue, onQueueChange, resetQueue, current, dismissCurrent, commitAndAdvance } from "@/lib/reminderQueue";
 import { aiConversationLogEntries } from "@/data/aiConversationLog";
 import { useCandidateProfile } from "@/data/candidateProfile";
 import {
@@ -58,6 +66,7 @@ type TabItem = {
 const tabs: TabItem[] = [
   { key: "records" },
   { key: "insight" },
+  { key: "arrangements" },
   { key: "mine" },
 ];
 
@@ -342,13 +351,28 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
   const [sendToSelfTargetUid, setSendToSelfTargetUid] = React.useState<string | null>(null);
   const [activeTestIdentityId, setActiveTestIdentityId] = React.useState<string | null>(null);
   const [testConversationTargetUid, setTestConversationTargetUid] = React.useState<string | null>(null);
-  const [settingsView, setSettingsView] = React.useState<null | "settings" | "appearance" | "about">(
+  const [settingsView, setSettingsView] = React.useState<null | "settings" | "appearance" | "about" | "ai">(
     null
   );
   const [searchQuery, setSearchQuery] = React.useState("");
   const [searchHistory, setSearchHistory] = React.useState(getInitialSearchHistory);
   const [recordDetail, setRecordDetail] = React.useState<RecordItem | null>(null);
   const [recordSnapshot, setRecordSnapshot] = React.useState<RecordItem | null>(null);
+  const [showGlobalAiModal, setShowGlobalAiModal] = React.useState(false);
+  const [globalAiInitialText, setGlobalAiInitialText] = React.useState<string | undefined>(undefined);
+  const [goalsVersion, setGoalsVersion] = React.useState(0);
+  const [aiNavTarget, setAiNavTarget] = React.useState<{
+    mode: "daily" | "monthly" | "yearly";
+    subTab?: string;
+    date: string;
+    month: number;
+    year: number;
+  } | null>(null);
+  const { reload: reloadArrangements, updateStatus } = useArrangements();
+  const memory = useMemoryFile();
+  const [showReminderPopup, setShowReminderPopup] = React.useState(false);
+  const [reminderFrozen, setReminderFrozen] = React.useState(false);
+  const [reminderEditTargetId, setReminderEditTargetId] = React.useState<string | null>(null);
   const [lastReadAiConversationCount, setLastReadAiConversationCount] =
     React.useState(getInitialAiConversationReadCount);
   const recordsDemoBaseTime = React.useMemo(() => Date.now(), []);
@@ -775,6 +799,59 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     });
   }, []);
 
+  const handleAiRecognizeFromMessage = React.useCallback((text: string) => {
+    setGlobalAiInitialText(text);
+    setShowGlobalAiModal(true);
+  }, []);
+
+  // Reminder: click card → edit
+  const handleReminderEdit = React.useCallback((arrangementId: string) => {
+    setReminderFrozen(true);
+    setReminderEditTargetId(arrangementId);
+    onNavigate("arrangements");
+  }, [onNavigate]);
+
+  // Reminder: edit modal closed → dismiss current and advance
+  const handleReminderEditClosed = React.useCallback(() => {
+    setReminderFrozen(false);
+    setReminderEditTargetId(null);
+    dismissCurrent();
+    commitAndAdvance();
+    const next = current();
+    if (next) {
+      // Show next in queue (reminderFrozen is already false)
+    } else {
+      setShowReminderPopup(false);
+      resetQueue();
+    }
+  }, []);
+
+  // Reminder scanning — every 10 seconds + on arrangement changes
+  React.useEffect(() => {
+    const scan = () => {
+      const list = loadArrangements();
+      const triggers = scanDueTriggers(list, memory.content);
+      if (triggers.length > 0) {
+        enqueue(triggers);
+        if (current()) setShowReminderPopup(true);
+      }
+    };
+    scan();
+    const id = setInterval(scan, 10000);
+    const onArrangementsChanged = () => scan();
+    window.addEventListener("arkme-arrangements-changed", onArrangementsChanged);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("arkme-arrangements-changed", onArrangementsChanged);
+    };
+  }, [memory.content]);
+
+  React.useEffect(() => {
+    return onQueueChange(() => {
+      setShowReminderPopup(true);
+    });
+  }, []);
+
   const createRecordExtension = React.useCallback((parentRecord: RecordItem, content: string) => {
     const timestamp = Date.now();
     setCreatedSelfRecords((prev) => {
@@ -1096,8 +1173,13 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
         <SettingsScreen
           onBack={() => setSettingsView(null)}
           onOpenAppearance={() => setSettingsView("appearance")}
+          onOpenAi={() => setSettingsView("ai")}
         />
       );
+    }
+
+    if (settingsView === "ai") {
+      return <AiSettingsScreen onBack={() => setSettingsView("settings")} />;
     }
 
     if (showAiConversation) {
@@ -1107,6 +1189,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
           targetIndex={aiConversationTargetIndex}
           onOpenRecordDetail={setRecordDetail}
           onOpenRecordSnapshot={setRecordSnapshot}
+          onAiRecognize={handleAiRecognizeFromMessage}
         />
       );
     }
@@ -1120,6 +1203,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
           onCreateRecord={createSelfRecord}
           onOpenRecordDetail={setRecordDetail}
           onOpenRecordSnapshot={setRecordSnapshot}
+          onAiRecognize={handleAiRecognizeFromMessage}
         />
       );
     }
@@ -1133,6 +1217,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
           onOpenRecordDetail={setRecordDetail}
           onOpenRecordSnapshot={setRecordSnapshot}
           onCreateReply={(content) => createTestReply(activeTestConversationSummary, content)}
+          onAiRecognize={handleAiRecognizeFromMessage}
         />
       );
     }
@@ -1170,6 +1255,10 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
       );
     }
 
+    if (currentPage === "arrangements") {
+      return <ArrangementsPage key={goalsVersion} onGoToAiSettings={() => { onNavigate("mine"); setSettingsView("ai"); }} aiNavTarget={aiNavTarget} onAiNavTargetHandled={() => setAiNavTarget(null)} editTargetId={reminderEditTargetId} onEditClosed={handleReminderEditClosed} />;
+    }
+
     if (currentPage === "insight") {
       return <InsightPreview />;
     }
@@ -1198,6 +1287,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
           onOpenSourceConversation={openSourceConversation}
           onOpenRecordDetail={setRecordDetail}
           onOpenRecordSnapshot={setRecordSnapshot}
+          onAiRecognize={handleAiRecognizeFromMessage}
         />
       </div>
     );
@@ -1236,6 +1326,41 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
             onClose={() => setRecordSnapshot(null)}
             onOpenSource={openSourceConversation}
           />
+          {showReminderPopup && (
+            <ReminderPopup
+              onClose={() => {
+                setShowReminderPopup(false);
+                setReminderFrozen(false);
+                resetQueue();
+              }}
+              onUpdateStatus={updateStatus}
+              frozen={reminderFrozen}
+              onEdit={handleReminderEdit}
+            />
+          )}
+          {showGlobalAiModal && (
+            <AiRecognitionModal
+              onClose={() => {
+                setShowGlobalAiModal(false);
+                setGlobalAiInitialText(undefined);
+                reloadArrangements();
+                setGoalsVersion((v) => v + 1);
+              }}
+              onNavigate={(target) => {
+                setShowAiConversation(false);
+                setShowSendToSelf(false);
+                setShowTestConversation(false);
+                setAiNavTarget(target);
+                onNavigate("arrangements");
+              }}
+              onGoToSettings={() => {
+                setShowGlobalAiModal(false);
+                onNavigate("mine");
+                setSettingsView("ai");
+              }}
+              initialText={globalAiInitialText}
+            />
+          )}
         </div>
       }
     />
@@ -2129,11 +2254,13 @@ function AiToolConversationChat({
   targetIndex,
   onOpenRecordDetail,
   onOpenRecordSnapshot,
+  onAiRecognize,
 }: {
   onBack: () => void;
   targetIndex?: number | null;
   onOpenRecordDetail: (record: RecordItem) => void;
   onOpenRecordSnapshot: (record: RecordItem) => void;
+  onAiRecognize?: (text: string) => void;
 }) {
   const { t } = usePreferences();
   const scrollContainerRef = React.useRef<HTMLDivElement>(null);
@@ -2254,6 +2381,11 @@ function AiToolConversationChat({
                           onOpenMemorySnapshot={() =>
                             onOpenRecordSnapshot(userInputRecord)
                           }
+                          onAiRecognize={
+                            onAiRecognize
+                              ? () => onAiRecognize(userInputRecord.text_content)
+                              : undefined
+                          }
                         />
                       );
                     })()}
@@ -2314,6 +2446,7 @@ function SendToSelfConversationChat({
   onCreateRecord,
   onOpenRecordDetail,
   onOpenRecordSnapshot,
+  onAiRecognize,
 }: {
   records: RecordItem[];
   targetUid?: string | null;
@@ -2321,6 +2454,7 @@ function SendToSelfConversationChat({
   onCreateRecord: (content: string) => void;
   onOpenRecordDetail: (record: RecordItem) => void;
   onOpenRecordSnapshot: (record: RecordItem) => void;
+  onAiRecognize?: (text: string) => void;
 }) {
   const { t } = usePreferences();
   const recordsWithoutSource = React.useMemo(
@@ -2365,6 +2499,7 @@ function SendToSelfConversationChat({
         targetRecordUid={targetUid}
         onOpenRecordDetail={onOpenRecordDetail}
         onOpenRecordSnapshot={onOpenRecordSnapshot}
+        onAiRecognize={onAiRecognize}
       />
       <ChatInput
         onSubmit={onCreateRecord}
@@ -2381,6 +2516,7 @@ function TestIdentityConversationChat({
   onOpenRecordDetail,
   onOpenRecordSnapshot,
   onCreateReply,
+  onAiRecognize,
 }: {
   summary: TestConversationSummary;
   targetUid?: string | null;
@@ -2388,6 +2524,7 @@ function TestIdentityConversationChat({
   onOpenRecordDetail: (record: RecordItem) => void;
   onOpenRecordSnapshot: (record: RecordItem) => void;
   onCreateReply: (content: string) => void;
+  onAiRecognize?: (text: string) => void;
 }) {
   const { resolvedLocale, t } = usePreferences();
   const candidateProfile = useCandidateProfile();
@@ -2486,33 +2623,40 @@ function TestIdentityConversationChat({
                       }
                       onOpenDetail={() => onOpenRecordDetail(record)}
                       onOpenMemorySnapshot={() => onOpenRecordSnapshot(record)}
+                      onAiRecognize={
+                        onAiRecognize
+                          ? () => onAiRecognize(record.text_content)
+                          : undefined
+                      }
                     />
                   </div>
                 ) : (
-                  <div className="flex items-start gap-2.5">
-                    <TestMessageIdentityAvatar
-                      identityId={record.identityId}
-                      summary={summary}
-                    />
-                    <div className="min-w-0 max-w-[82%]">
-                      {summary.conversationType === "group" && (
-                        <p className="mb-1 px-1 text-[11px] leading-4 text-text-tertiary">
-                          {summary.memberIdentities.find(
+                  <ChatBubble
+                    textContent={record.text_content}
+                    disableAnimation
+                    side="left"
+                    variant="record"
+                    topLabel={
+                      summary.conversationType === "group"
+                        ? summary.memberIdentities.find(
                             (identity) => identity.id === record.identityId
-                          )?.name ?? "群成员"}
-                        </p>
-                      )}
-                      <button
-                        type="button"
-                        className="max-w-full rounded-[14px] rounded-tl-[4px] bg-surface px-3.5 py-2.5 text-left text-text shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition hover:bg-[var(--record-card-hover-bg)] active:scale-[0.99]"
-                        onClick={() => onOpenRecordDetail(record)}
-                      >
-                        <p className="whitespace-pre-wrap break-words text-[14px] leading-[1.55]">
-                          {record.text_content}
-                        </p>
-                      </button>
-                    </div>
-                  </div>
+                          )?.name ?? "群成员"
+                        : undefined
+                    }
+                    avatar={
+                      <TestMessageIdentityAvatar
+                        identityId={record.identityId}
+                        summary={summary}
+                      />
+                    }
+                    onOpenDetail={() => onOpenRecordDetail(record)}
+                    onOpenMemorySnapshot={() => onOpenRecordSnapshot(record)}
+                    onAiRecognize={
+                      onAiRecognize
+                        ? () => onAiRecognize(record.text_content)
+                        : undefined
+                    }
+                  />
                 )}
               </div>
             );
@@ -3110,9 +3254,11 @@ function MineActionCard({
 function SettingsScreen({
   onBack,
   onOpenAppearance,
+  onOpenAi,
 }: {
   onBack: () => void;
   onOpenAppearance: () => void;
+  onOpenAi: () => void;
 }) {
   const { localeCode, resolvedLocale, t } = usePreferences();
   const [showLanguageSheet, setShowLanguageSheet] = React.useState(false);
@@ -3127,6 +3273,11 @@ function SettingsScreen({
             title={t("settings.appearance")}
             description={t("settings.appearanceDesc")}
             onClick={onOpenAppearance}
+          />
+          <SettingsListItem
+            title="AI 识别"
+            description="配置 API、模型、记忆文件"
+            onClick={onOpenAi}
           />
           <SettingsListItem
             title={t("settings.language")}
@@ -3431,6 +3582,7 @@ function ThemePreview({ mode }: { mode: ResolvedTheme }) {
 function getTabLabel(page: PageType, t: ReturnType<typeof usePreferences>["t"]) {
   if (page === "records") return t("tabs.records");
   if (page === "insight") return t("tabs.insight");
+  if (page === "arrangements") return t("tabs.arrangements");
   return t("tabs.mine");
 }
 
